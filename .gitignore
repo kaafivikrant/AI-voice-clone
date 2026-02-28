@@ -27,10 +27,7 @@ Thumbs.db
 *.swo
 
 # Audio output files (generated)
-output_voice_clone.wav
-clone.wav
-soprano_sample.wav
-kittentts_sample.wav
+*.wav
 
 # Model cache
 *.pt

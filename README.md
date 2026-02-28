@@ -10,7 +10,6 @@ Voice-based support app with three escalating AI agents:
 ## Project Structure
 
 ```text
-voice-agent-system/
 ├── backend/
 │   ├── server.py
 │   ├── groq_client.py
@@ -29,6 +28,10 @@ voice-agent-system/
 │   ├── package.json
 │   ├── vite.config.js
 │   └── .env.example
+├── experiments/            # Standalone TTS scripts (not integrated)
+│   ├── voice_clone.py      # Qwen3 TTS voice cloning
+│   ├── tts_engine.py       # SopranoTTS engine wrapper
+│   └── tts_benchmark.py    # Soprano vs KittenTTS benchmarks
 └── README.md
 ```
 
@@ -89,11 +92,12 @@ cp .env.example .env
 2. Audio blob is sent to `/ws/voice`.
 3. Backend transcribes with Groq Whisper.
 4. Transcript is sent to current agent prompt with per-agent history.
-5. Response is checked for escalation tags:
+5. LLM response is **streamed sentence-by-sentence** — each sentence is synthesized and sent as audio immediately, reducing time-to-first-audio.
+6. Response is checked for escalation tags:
    - `[ESCALATE:SENIOR]` -> switch to `priya`
    - `[ESCALATE:CTO]` -> switch to `kabir`
-6. Escalation tag is stripped from spoken text.
-7. Text is synthesized with KittenTTS and streamed back as WAV bytes.
+7. Escalation tag is stripped from spoken text.
+8. On escalation, the new agent receives conversation context from the previous agent.
 
 ## HTTP + WebSocket Endpoints
 
@@ -103,7 +107,15 @@ cp .env.example .env
 - `WS /ws/voice` -> primary real-time voice channel
 
 WebSocket JSON events used:
-- Client -> server: `audio_meta`, `reset`, `ping`
-- Server -> client: `ready`, `transcript`, `processing`, `response`, `agent_state`, `escalation`, `error`
+- Client -> server: `audio_meta`, `text_input`, `reset`, `ping`
+- Server -> client: `ready`, `transcript`, `processing`, `response_chunk`, `response_end`, `agent_state`, `escalation`, `error`
 
 Binary WebSocket messages from server are WAV audio segments to play in sequence.
+
+## Experiments
+
+The `experiments/` folder contains standalone TTS scripts for testing and benchmarking, **not integrated** with the main voice agent system:
+
+- **`voice_clone.py`** — Voice cloning with Qwen3 TTS (1.7B) using a reference audio file
+- **`tts_engine.py`** — SopranoTTS engine wrapper with multi-device support (CUDA/MPS/CPU)
+- **`tts_benchmark.py`** — Head-to-head benchmark of Soprano vs KittenTTS
