@@ -7,6 +7,7 @@ __pycache__/
 .venv_*/
 venv/
 env/
+backend/.venv312
 
 # Node
 node_modules/
