@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.venv/
+.venv_*/
+venv/
+env/
+
+# Node
+node_modules/
+dist/
+
+# Environment / secrets
+.env
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Audio output files (generated)
+output_voice_clone.wav
+clone.wav
+soprano_sample.wav
+kittentts_sample.wav
+
+# Model cache
+*.pt
+*.bin
+*.safetensors
