@@ -1,0 +1,8 @@
+#!/bin/sh
+'''exec' "/Users/vik/AI voice clone/voice-agent-system/backend/.venv312/bin/python3.12" "$0" "$@"
+' '''
+import sys
+from csvw.__main__ import csvw2sqlite
+if __name__ == '__main__':
+    sys.argv[0] = sys.argv[0].removesuffix('.exe')
+    sys.exit(csvw2sqlite())
