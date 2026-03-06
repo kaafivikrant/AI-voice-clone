@@ -1,37 +1,28 @@
 from __future__ import annotations
 
-ESCALATION_MAP: dict[str, dict[str, str] | None] = {
-    "arjun": {"tag": "[ESCALATE:SENIOR]", "next": "priya"},
-    "priya": {"tag": "[ESCALATE:CTO]", "next": "kabir"},
-    "kabir": None,
-}
+import re
+
+ROUTE_TAG_PATTERN = re.compile(r"\[ROUTE:(\w+)\]")
 
 
-ALL_ESCALATION_TAGS = [
-    cfg["tag"] for cfg in ESCALATION_MAP.values() if cfg and "tag" in cfg
-]
-
-
-def _strip_all_tags(text: str) -> str:
-    cleaned = text or ""
-    for tag in ALL_ESCALATION_TAGS:
-        cleaned = cleaned.replace(tag, "")
-    return cleaned.strip()
-
-
-def check_escalation(agent_id: str, response_text: str) -> tuple[str, str | None]:
+def check_route(response_text: str, valid_agent_ids: set[str]) -> tuple[str, str | None]:
     """
-    Returns (cleaned_text, next_agent_id_or_None).
-    Strips escalation tags from spoken text so TTS never speaks control tokens.
+    Scan for [ROUTE:agent_id] tag in response text.
+    Returns (cleaned_text, target_agent_id_or_None).
+    Validates that the target exists in valid_agent_ids.
     """
-    esc = ESCALATION_MAP.get(agent_id)
-    if not esc:
-        # Final agent (Kabir) should never escalate; strip any accidental control tags.
-        return _strip_all_tags(response_text), None
+    match = ROUTE_TAG_PATTERN.search(response_text or "")
+    if not match:
+        return strip_route_tags(response_text), None
 
-    tag = esc["tag"]
-    if tag in response_text:
-        cleaned = _strip_all_tags(response_text)
-        return cleaned, esc["next"]
+    target_id = match.group(1).lower()
+    cleaned = ROUTE_TAG_PATTERN.sub("", response_text).strip()
 
-    return _strip_all_tags(response_text), None
+    if target_id in valid_agent_ids:
+        return cleaned, target_id
+    return cleaned, None
+
+
+def strip_route_tags(text: str) -> str:
+    """Remove all [ROUTE:...] tags from text."""
+    return ROUTE_TAG_PATTERN.sub("", text or "").strip()

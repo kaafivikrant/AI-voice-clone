@@ -14,7 +14,7 @@ export default function ChatHistory({ messages, processingStage, activeAgentName
   return (
     <section className="chat-history" ref={listRef}>
       {messages.length === 0 && !isThinking && (
-        <p className="chat-placeholder">Say something to start the conversation.</p>
+        <p className="chat-placeholder">Start a conversation with your AI team.</p>
       )}
 
       {messages.map((message) => (

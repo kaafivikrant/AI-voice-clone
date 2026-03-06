@@ -16,7 +16,7 @@ export default function TextInput({ disabled, onSend }) {
       <input
         className="text-input-field"
         type="text"
-        placeholder="Type a message..."
+        placeholder="Ask your team something..."
         value={text}
         onChange={(e) => setText(e.target.value)}
         disabled={disabled}

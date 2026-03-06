@@ -1,23 +1,21 @@
-import React from 'react';
-
 function AgentCard({ agent, isActive, isTransferTarget, isTransferSource }) {
   return (
     <div
       className={[
         'agent-card',
-        isActive ? 'is-active' : '',
-        isTransferTarget ? 'is-transfer-target' : '',
-        isTransferSource ? 'is-transfer-source' : '',
+        isActive && 'is-active',
+        isTransferTarget && 'is-transfer-target',
+        isTransferSource && 'is-transfer-source',
       ]
         .filter(Boolean)
         .join(' ')}
     >
-      <div className="agent-avatar">{agent.name.slice(0, 1)}</div>
+      <div className="agent-avatar">{agent.name?.slice(0, 1)}</div>
       <div className="agent-meta">
         <div className="agent-name">{agent.name}</div>
         <div className="agent-title">{agent.title}</div>
       </div>
-      <div className="agent-state">{isActive ? 'Speaking' : 'Idle'}</div>
+      <div className="agent-state">{isActive ? 'Active' : ''}</div>
     </div>
   );
 }
