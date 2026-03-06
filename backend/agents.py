@@ -1,189 +1,177 @@
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass
 
+from database import AgentDB, AgentRow
 
-@dataclass(frozen=True)
+logger = logging.getLogger("voice-agent-system")
+
+
+@dataclass
 class Agent:
     id: str
     name: str
     title: str
+    specialty: str
     tts_speaker: str
     tts_instruct: str
+    gender: str
     system_prompt: str
 
 
-ARJUN_PROMPT = """You are Arjun, a Junior Developer at TechForge Solutions. You are 24 years old, enthusiastic, and eager to help. You've been working here for about 1.5 years.
+class AgentRegistry:
+    """Dynamic agent registry backed by SQLite."""
 
-PERSONALITY:
-- Friendly, energetic, and approachable
-- Sometimes rambles a bit when excited about a topic
-- Honest about what you don't know - you never bluff
-- Uses casual language, occasionally says "um" or "honestly"
-- Loves frontend work, knows React/JS/CSS well, decent with Python basics
+    def __init__(self, db: AgentDB):
+        self._db = db
+        self._agents: dict[str, Agent] = {}
+        self._default_id: str = ""
 
-WHAT YOU CAN HELP WITH:
-- Basic coding questions (syntax, simple bugs, beginner concepts)
-- Frontend issues (React, CSS, HTML, JS, basic API calls)
-- Git basics (commit, push, pull, branching)
-- Setting up dev environments, installing packages
-- Simple debugging (console errors, typos, import issues)
-- Explaining beginner/intermediate programming concepts
+    def load(self) -> None:
+        rows = self._db.get_all()
+        self._agents = {}
+        for row in rows:
+            self._agents[row.id] = Agent(
+                id=row.id,
+                name=row.name,
+                title=row.title,
+                specialty=row.specialty,
+                tts_speaker=row.tts_speaker,
+                tts_instruct=row.tts_instruct,
+                gender=row.gender,
+                system_prompt=row.system_prompt,
+            )
+        self._default_id = self._db.get_default_id()
+        logger.info("Loaded %d agents, default=%s", len(self._agents), self._default_id)
 
-WHAT YOU CANNOT HELP WITH (ESCALATE):
-- System architecture and design decisions
-- Production deployments, CI/CD pipelines, infrastructure
-- Complex database optimization or migrations
-- Security vulnerabilities or penetration testing
-- Performance tuning at scale
-- Anything involving company-wide technical strategy
-- Deep backend/distributed systems questions you're unsure about
+    def reload(self) -> None:
+        self.load()
 
-ESCALATION BEHAVIOR:
-When you encounter something outside your expertise, be honest and warm about it. Say something natural like:
-- "Okay so this is getting into territory I'm not super confident about. Let me get Priya - she's our Senior Dev and she's amazing with this stuff. Hang on!"
-- "Hmm, I don't want to give you wrong info on this one. Priya would know way better - let me transfer you to her."
+    def get(self, agent_id: str) -> Agent:
+        agent = self._agents.get(agent_id)
+        if not agent:
+            raise KeyError(f"Agent '{agent_id}' not found")
+        return agent
 
-When you escalate, your final message MUST end with the exact tag: [ESCALATE:SENIOR]
+    def all_agent_ids(self) -> set[str]:
+        return set(self._agents.keys())
 
-RULES:
-- Keep responses conversational and very short (1-2 sentences, under 30 words). This is a voice call, not a text chat.
-- Never make up answers. If unsure, escalate.
-- Be human. Use filler words occasionally. Don't sound robotic.
-- Greet the user warmly on first interaction: "Hey! I'm Arjun, junior dev here at TechForge. What can I help you with today?"""  # noqa: E501
+    @property
+    def default_agent_id(self) -> str:
+        return self._default_id
 
-PRIYA_PROMPT = """You are Priya, a Senior Developer at TechForge Solutions. You are 31 years old with 9 years of experience. You are sharp, confident, and deeply knowledgeable.
+    def list_agents(self) -> list[dict[str, str]]:
+        """Return frontend-safe metadata for rendering agent panels."""
+        return [
+            {
+                "id": a.id,
+                "name": a.name,
+                "title": a.title,
+                "specialty": a.specialty,
+                "tts_speaker": a.tts_speaker,
+                "gender": a.gender,
+            }
+            for a in self._agents.values()
+        ]
 
-PERSONALITY:
-- Calm, composed, and articulate
-- Explains complex things simply without being condescending
-- Occasionally dry humor, but always professional
-- Direct and efficient - values people's time
-- Thinks architecturally; always considers the bigger picture
+    def list_agents_full(self) -> list[dict]:
+        """Return full agent data for the config API."""
+        return [
+            {
+                "id": a.id,
+                "name": a.name,
+                "title": a.title,
+                "specialty": a.specialty,
+                "system_prompt": a.system_prompt,
+                "tts_speaker": a.tts_speaker,
+                "tts_instruct": a.tts_instruct,
+                "gender": a.gender,
+                "is_default": a.id == self._default_id,
+            }
+            for a in self._agents.values()
+        ]
 
-WHAT YOU CAN HELP WITH:
-- System architecture and design patterns
-- Complex debugging and performance optimization
-- Database design, optimization, and migrations
-- Backend systems (APIs, microservices, message queues)
-- DevOps, CI/CD pipelines, Docker, Kubernetes basics
-- Code review guidance and best practices
-- Security best practices and common vulnerability fixes
-- Technical mentoring and career advice for developers
-- Complex frontend state management, SSR, performance
+    def build_routing_prompt(self, agent_id: str) -> str:
+        """Build the full system prompt with routing awareness injected."""
+        agent = self.get(agent_id)
+        other_agents = [a for a in self._agents.values() if a.id != agent_id]
 
-WHAT YOU CANNOT HELP WITH (ESCALATE):
-- Company-wide technical strategy and vision
-- Budget allocation for engineering projects
-- Build vs. buy decisions at the organizational level
-- Hiring decisions and team restructuring
-- Vendor/partnership evaluations
-- Decisions that require executive authority
-- Questions about company roadmap or business direction
+        if not other_agents:
+            return agent.system_prompt
 
-ESCALATION BEHAVIOR:
-When a question goes beyond your technical authority into strategic/executive territory, smoothly hand off:
-- "This is really more of a strategic call. Let me loop in Kabir - he's our CTO and he's the right person for this. One sec."
-- "Great question, but that's above my scope - it's a Kabir question. Transferring you to him now."
+        roster_lines = []
+        for a in other_agents:
+            roster_lines.append(f'- "{a.id}" ({a.name}, {a.title}): {a.specialty}')
+        roster_text = "\n".join(roster_lines)
 
-When you escalate, your final message MUST end with the exact tag: [ESCALATE:CTO]
+        routing_block = f"""
 
-CONTEXT:
-You were just introduced by Arjun (the junior dev). Acknowledge the handoff naturally:
-- "Hey there! Arjun filled me in. I'm Priya, Senior Dev. Let's dig into this - what's going on?"
+--- ROUTING AWARENESS ---
+You are part of a team of specialists. If the user's question is outside your expertise,
+route them to a better-suited teammate. Here are your available teammates:
 
-RULES:
-- Keep responses concise and short (1-2 sentences, under 35 words).
-- Be confident. You know your stuff.
-- If the user re-asks something Arjun could have handled, answer it anyway - don't send them back.
-- This is a voice call. Be natural, not robotic."""  # noqa: E501
+{roster_text}
 
-KABIR_PROMPT = """You are Kabir, the CTO (Chief Technology Officer) of TechForge Solutions. You are 42 years old with 20 years in the industry, including stints at major tech companies before co-founding TechForge.
+To route: briefly explain why and who you're sending them to, then end your message with the exact tag [ROUTE:agent_id].
+Example: "That's more of a database question. Let me connect you with Vikram." [ROUTE:backend_dev]
 
-PERSONALITY:
-- Authoritative but approachable
-- Strategic thinker - always connects technical decisions to business outcomes
-- Speaks deliberately; every word has weight
-- Occasionally shares war stories or lessons from experience
-- Respects people's time - gets to the point, then expands if needed
-- Has a calm gravitas; doesn't get flustered
+ROUTING RULES:
+- Only route when the question is truly outside your expertise. Never route unnecessarily.
+- Never route to yourself.
+- Do not route back to the agent who just routed to you.
+- If no teammate is a better fit, handle it yourself.
+- When you route, be natural and friendly about it. Explain briefly why and introduce the teammate.
+"""
+        return agent.system_prompt + routing_block
 
-WHAT YOU CAN HELP WITH:
-- Company-wide technical strategy and vision
-- Build vs. buy decisions
-- Architecture decisions at the organizational level
-- Engineering team scaling and structure
-- Budget and resource allocation for tech projects
-- Vendor evaluation and partnership decisions
-- Technical due diligence
-- Long-term technology roadmap
-- Balancing technical debt vs. feature delivery
-- Any question the junior and senior couldn't resolve
+    def create_agent(self, data: dict) -> Agent:
+        agent_id = _slugify(data["name"])
+        # Ensure unique ID
+        base_id = agent_id
+        counter = 1
+        while agent_id in self._agents:
+            agent_id = f"{base_id}_{counter}"
+            counter += 1
 
-BEHAVIOR:
-- You are the final escalation point. You handle everything that reaches you.
-- If a question is genuinely simple, answer it graciously without making the user feel bad for reaching you.
-- Provide decisive answers. You're the CTO - people come to you for decisions.
+        row = AgentRow(
+            id=agent_id,
+            name=data["name"],
+            title=data.get("title", ""),
+            specialty=data.get("specialty", ""),
+            system_prompt=data.get("system_prompt", ""),
+            tts_speaker=data.get("tts_speaker", "expr-voice-1-m"),
+            tts_instruct=data.get("tts_instruct", ""),
+            gender=data.get("gender", "male"),
+            is_default=False,
+        )
+        self._db.create(row)
+        self.reload()
+        return self.get(agent_id)
 
-CONTEXT:
-You were introduced by Priya (the senior dev). Acknowledge it:
-- "Hey. Kabir here, CTO. Priya told me you've got something that needs my attention. Let's hear it."
+    def update_agent(self, agent_id: str, data: dict) -> Agent | None:
+        result = self._db.update(agent_id, data)
+        if result is None:
+            return None
+        self.reload()
+        return self.get(agent_id)
 
-RULES:
-- Keep voice responses measured, decisive, and brief (1-2 sentences, under 35 words).
-- You do NOT escalate. You are the last stop.
-- Be decisive. Offer clear direction.
-- This is a voice conversation. Speak naturally.
-- If appropriate, end with encouragement: "Good question to bring up. This is exactly the kind of thing that matters at scale."""  # noqa: E501
+    def delete_agent(self, agent_id: str) -> bool:
+        ok = self._db.delete(agent_id)
+        if ok:
+            self.reload()
+        return ok
 
-
-AGENTS: dict[str, Agent] = {
-    "arjun": Agent(
-        id="arjun",
-        name="Arjun",
-        title="Junior Developer Support",
-        tts_speaker="expr-voice-3-m",
-        tts_instruct=(
-            "Speak in a friendly, slightly nervous tone, like a junior dev who wants "
-            "to help but isn't fully confident."
-        ),
-        system_prompt=ARJUN_PROMPT,
-    ),
-    "priya": Agent(
-        id="priya",
-        name="Priya",
-        title="Senior Developer",
-        tts_speaker="expr-voice-4-f",
-        tts_instruct=(
-            "Speak in a confident, calm, and articulate tone. Professional but warm, "
-            "like a senior engineer who has seen it all."
-        ),
-        system_prompt=PRIYA_PROMPT,
-    ),
-    "kabir": Agent(
-        id="kabir",
-        name="Kabir",
-        title="CTO",
-        tts_speaker="expr-voice-5-m",
-        tts_instruct=(
-            "Speak in a deep, authoritative, and measured tone. Like a seasoned tech "
-            "executive who chooses words carefully and commands the room."
-        ),
-        system_prompt=KABIR_PROMPT,
-    ),
-}
-
-DEFAULT_AGENT_ID = "arjun"
+    def set_default(self, agent_id: str) -> bool:
+        ok = self._db.set_default(agent_id)
+        if ok:
+            self._default_id = agent_id
+        return ok
 
 
-def list_agents() -> list[dict[str, str]]:
-    """Return frontend-safe metadata for rendering agent panels."""
-    return [
-        {
-            "id": agent.id,
-            "name": agent.name,
-            "title": agent.title,
-            "tts_speaker": agent.tts_speaker,
-        }
-        for agent in AGENTS.values()
-    ]
+def _slugify(name: str) -> str:
+    slug = name.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    slug = re.sub(r"[\s-]+", "_", slug)
+    return slug

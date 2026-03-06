@@ -1,18 +1,14 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
+import AgentBuilder from './components/AgentBuilder';
 import AgentPanel from './components/AgentPanel';
 import ChatHistory from './components/ChatHistory';
 import TextInput from './components/TextInput';
 import Transcript from './components/Transcript';
 import VoiceButton from './components/VoiceButton';
+import useAgentConfig from './hooks/useAgentConfig';
 import useAudioRecorder from './hooks/useAudioRecorder';
 import useWebSocket from './hooks/useWebSocket';
 import { playAudio, stopPlayback, unlockAudio } from './utils/audioPlayer';
-
-const DEFAULT_AGENTS = [
-  { id: 'arjun', name: 'Arjun', title: 'Junior Developer Support' },
-  { id: 'priya', name: 'Priya', title: 'Senior Developer' },
-  { id: 'kabir', name: 'Kabir', title: 'CTO' },
-];
 
 function createMessage({ id, role, agentId, agentName, text }) {
   return {
@@ -34,19 +30,21 @@ function isThanksOnly(text) {
 }
 
 export default function App() {
-  const [agents, setAgents] = useState(DEFAULT_AGENTS);
-  const [activeAgentId, setActiveAgentId] = useState('arjun');
+  const agentConfig = useAgentConfig();
+  const [agents, setAgents] = useState([]);
+  const [activeAgentId, setActiveAgentId] = useState('');
+  const [defaultAgentId, setDefaultAgentId] = useState('');
   const [messages, setMessages] = useState([]);
   const [transcript, setTranscript] = useState('');
   const [processingStage, setProcessingStage] = useState('idle');
   const [transfer, setTransfer] = useState(null);
   const [serverError, setServerError] = useState('');
   const [continuousMode, setContinuousMode] = useState(false);
+  const [showBuilder, setShowBuilder] = useState(false);
   const continuousModeRef = useRef(false);
 
   // Track the streaming message being built
   const streamingMsgIdRef = useRef(null);
-  // Track whether we've received the last audio chunk (for continuous mode restart)
   const pendingAudioCountRef = useRef(0);
 
   const agentNameById = useMemo(() => {
@@ -87,7 +85,21 @@ export default function App() {
         if (payload.current_agent) {
           setActiveAgentId(payload.current_agent);
         }
+        if (payload.default_agent_id) {
+          setDefaultAgentId(payload.default_agent_id);
+        }
         setServerError('');
+        return;
+      }
+
+      if (payload.type === 'agents_updated') {
+        if (Array.isArray(payload.agents) && payload.agents.length > 0) {
+          setAgents(payload.agents);
+        }
+        if (payload.default_agent_id) {
+          setDefaultAgentId(payload.default_agent_id);
+        }
+        agentConfig.refreshAgents();
         return;
       }
 
@@ -136,7 +148,7 @@ export default function App() {
         return;
       }
 
-      // Legacy non-streaming response (kept for backwards compat)
+      // Legacy non-streaming response
       if (payload.type === 'response') {
         const agentId = payload.agent || activeAgentId;
         appendMessage(
@@ -193,7 +205,6 @@ export default function App() {
       try {
         await playAudio(audioBuffer);
         pendingAudioCountRef.current = Math.max(0, pendingAudioCountRef.current - 1);
-        // Only restart recording after the last audio chunk finishes
         if (continuousModeRef.current && pendingAudioCountRef.current === 0) {
           await recorder.startRecording();
         }
@@ -218,7 +229,6 @@ export default function App() {
 
   const handleStartRecording = async () => {
     setServerError('');
-    // Barge-in: stop any playing audio when user starts speaking
     stopPlayback();
     pendingAudioCountRef.current = 0;
     await unlockAudio();
@@ -244,7 +254,7 @@ export default function App() {
 
   const handleReset = async () => {
     ws.resetSession();
-    setActiveAgentId('arjun');
+    setActiveAgentId(defaultAgentId || '');
     setMessages([]);
     setTranscript('');
     setTransfer(null);
@@ -262,6 +272,8 @@ export default function App() {
     }
   };
 
+  const defaultAgentName = agentNameById.get(defaultAgentId) || 'Default';
+
   const statusText =
     ws.status === 'connected'
       ? 'Connected'
@@ -275,12 +287,17 @@ export default function App() {
     <div className="app-shell">
       <header className="topbar">
         <div>
-          <h1>TechForge Voice Escalation Support</h1>
-          <p>Talk to Arjun, Priya, and Kabir with automatic voice escalation.</p>
+          <h1>AI Agent Team</h1>
+          <p>Intelligent routing between specialists</p>
         </div>
-        <button className="reset-btn" type="button" onClick={handleReset}>
-          Reset to Arjun
-        </button>
+        <div className="topbar-actions">
+          <button className="config-btn" type="button" onClick={() => setShowBuilder(true)}>
+            Configure Agents
+          </button>
+          <button className="reset-btn" type="button" onClick={handleReset}>
+            New Conversation
+          </button>
+        </div>
       </header>
 
       <AgentPanel agents={agents} activeAgentId={activeAgentId} transfer={transfer} />
@@ -311,22 +328,32 @@ export default function App() {
 
         <div className="status-block">
           <p>
-            Connection: <strong>{statusText}</strong>
+            Status: <strong>{statusText}</strong>
           </p>
           <p>
-            Active Agent: <strong>{agentNameById.get(activeAgentId) || activeAgentId}</strong>
+            Agent: <strong>{agentNameById.get(activeAgentId) || activeAgentId}</strong>
           </p>
           <p>
-            Auto Listen: <strong>{continuousMode ? 'On' : 'Off'}</strong>
-          </p>
-          <p>
-            Recorder Format: <code>{recorder.mimeType}</code>
+            Listening: <strong>{continuousMode ? 'Active' : 'Off'}</strong>
           </p>
         </div>
       </footer>
 
       {(recorder.error || serverError) && (
         <aside className="error-banner">{recorder.error || serverError}</aside>
+      )}
+
+      {showBuilder && (
+        <AgentBuilder
+          agents={agentConfig.agents}
+          voices={agentConfig.voices}
+          defaultAgentId={agentConfig.defaultAgentId}
+          onClose={() => setShowBuilder(false)}
+          onCreateAgent={agentConfig.createAgent}
+          onUpdateAgent={agentConfig.updateAgent}
+          onDeleteAgent={agentConfig.deleteAgent}
+          onSetDefault={agentConfig.setDefault}
+        />
       )}
     </div>
   );
