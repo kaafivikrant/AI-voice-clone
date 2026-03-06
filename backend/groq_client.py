@@ -164,7 +164,7 @@ def build_groq_service_from_env() -> GroqService:
     return GroqService(
         api_key=api_key,
         stt_model=os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo"),
-        llm_model=os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile"),
+        llm_model=os.getenv("GROQ_LLM_MODEL", "openai/gpt-oss-120b"),
         temperature=float(os.getenv("GROQ_TEMPERATURE", "0.7")),
         max_tokens=int(os.getenv("GROQ_MAX_TOKENS", "120")),
     )

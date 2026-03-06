@@ -9,8 +9,10 @@ Supports both streaming and non-streaming for the voice pipeline.
 from __future__ import annotations
 
 import itertools
+import json
 import logging
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator
 
@@ -101,14 +103,24 @@ class MultiProviderLLM:
         for attempt in range(len(self.providers)):
             idx = (self._current_idx + attempt) % len(self.providers)
             provider = self.providers[idx]
+            logger.info(
+                "[LLM] attempt %d/%d → %s (%s) [non-streaming]",
+                attempt + 1, len(self.providers), provider.name, provider.model,
+            )
             try:
+                t0 = time.monotonic()
                 result = await self._call_provider(provider, idx, messages, stream=False)
+                elapsed = time.monotonic() - t0
+                logger.info(
+                    "[LLM] ✓ %s responded in %.2fs (%d chars)",
+                    provider.name, elapsed, len(result),
+                )
                 # Success — set this as current for round-robin
                 self._current_idx = (idx + 1) % len(self.providers)
                 return result
             except Exception as exc:
                 errors.append(f"{provider.name}: {exc}")
-                logger.warning("Provider %s failed: %s", provider.name, exc)
+                logger.warning("[LLM] ✗ %s failed: %s", provider.name, exc)
                 continue
 
         raise RuntimeError(f"All LLM providers failed: {'; '.join(errors)}")
@@ -130,28 +142,53 @@ class MultiProviderLLM:
             provider = self.providers[idx]
 
             if not provider.supports_streaming:
-                # For non-streaming providers, yield the full response at once
+                logger.info(
+                    "[LLM] attempt %d/%d → %s (%s) [non-streaming fallback]",
+                    attempt + 1, len(self.providers), provider.name, provider.model,
+                )
                 try:
+                    t0 = time.monotonic()
                     result = await self._call_provider(provider, idx, messages, stream=False)
+                    elapsed = time.monotonic() - t0
+                    logger.info(
+                        "[LLM] ✓ %s responded in %.2fs (%d chars)",
+                        provider.name, elapsed, len(result),
+                    )
                     self._current_idx = (idx + 1) % len(self.providers)
                     yield result
                     return
                 except Exception as exc:
                     errors.append(f"{provider.name}: {exc}")
-                    logger.warning("Provider %s failed: %s", provider.name, exc)
+                    logger.warning("[LLM] ✗ %s failed: %s", provider.name, exc)
                     continue
 
+            logger.info(
+                "[LLM] attempt %d/%d → %s (%s) [streaming]",
+                attempt + 1, len(self.providers), provider.name, provider.model,
+            )
             try:
+                t0 = time.monotonic()
                 token_count = 0
                 async for token in self._stream_provider(provider, idx, messages):
+                    if token_count == 0:
+                        first_token_ms = (time.monotonic() - t0) * 1000
+                        logger.info(
+                            "[LLM] ✓ %s first token in %.0fms",
+                            provider.name, first_token_ms,
+                        )
                     token_count += 1
                     yield token
                 if token_count > 0:
+                    elapsed = time.monotonic() - t0
+                    logger.info(
+                        "[LLM] ✓ %s stream complete: %d tokens in %.2fs",
+                        provider.name, token_count, elapsed,
+                    )
                     self._current_idx = (idx + 1) % len(self.providers)
                     return
             except Exception as exc:
                 errors.append(f"{provider.name}: {exc}")
-                logger.warning("Provider %s streaming failed: %s", provider.name, exc)
+                logger.warning("[LLM] ✗ %s streaming failed: %s", provider.name, exc)
                 continue
 
         raise RuntimeError(f"All LLM providers failed: {'; '.join(errors)}")
@@ -188,6 +225,7 @@ class MultiProviderLLM:
         client = self._groq_clients.get(idx)
         if not client:
             raise RuntimeError(f"Groq client not initialized for {provider.name}")
+        logger.debug("[LLM:Groq] calling %s model=%s", provider.name, provider.model)
         response = await client.chat.completions.create(
             model=provider.model,
             messages=messages,
@@ -202,6 +240,7 @@ class MultiProviderLLM:
         client = self._groq_clients.get(idx)
         if not client:
             raise RuntimeError(f"Groq client not initialized for {provider.name}")
+        logger.debug("[LLM:Groq] streaming %s model=%s", provider.name, provider.model)
         stream = await client.chat.completions.create(
             model=provider.model,
             messages=messages,
@@ -218,6 +257,7 @@ class MultiProviderLLM:
 
     async def _call_openai_compat(self, provider: LLMProvider, messages: list[dict]) -> str:
         url = f"{provider.base_url}/chat/completions"
+        logger.debug("[LLM:OpenAI-compat] calling %s url=%s model=%s", provider.name, url, provider.model)
         resp = await self._http_client.post(
             url,
             headers={
@@ -228,9 +268,12 @@ class MultiProviderLLM:
                 "model": provider.model,
                 "messages": messages,
                 "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
+                "max_completion_tokens": self.max_tokens,
+                "stream": False,
             },
         )
+        if resp.status_code != 200:
+            logger.error("[LLM:OpenAI-compat] %s HTTP %d: %s", provider.name, resp.status_code, resp.text[:500])
         resp.raise_for_status()
         data = resp.json()
         return (data["choices"][0]["message"]["content"] or "").strip()
@@ -239,6 +282,7 @@ class MultiProviderLLM:
         self, provider: LLMProvider, messages: list[dict],
     ) -> AsyncIterator[str]:
         url = f"{provider.base_url}/chat/completions"
+        logger.debug("[LLM:OpenAI-compat] streaming %s url=%s model=%s", provider.name, url, provider.model)
         async with self._http_client.stream(
             "POST",
             url,
@@ -250,11 +294,14 @@ class MultiProviderLLM:
                 "model": provider.model,
                 "messages": messages,
                 "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
+                "max_completion_tokens": self.max_tokens,
                 "stream": True,
             },
         ) as resp:
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                body = await resp.aread()
+                logger.error("[LLM:OpenAI-compat] %s stream HTTP %d: %s", provider.name, resp.status_code, body.decode()[:500])
+                resp.raise_for_status()
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
                     continue
@@ -262,7 +309,6 @@ class MultiProviderLLM:
                 if data_str == "[DONE]":
                     break
                 try:
-                    import json
                     chunk = json.loads(data_str)
                     delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
                     if delta:
@@ -273,6 +319,7 @@ class MultiProviderLLM:
     # ── Mistral ──────────────────────────────────────────────────────
 
     async def _call_mistral(self, provider: LLMProvider, messages: list[dict]) -> str:
+        logger.debug("[LLM:Mistral] calling model=%s", provider.model)
         resp = await self._http_client.post(
             "https://api.mistral.ai/v1/chat/completions",
             headers={
@@ -286,6 +333,8 @@ class MultiProviderLLM:
                 "max_tokens": self.max_tokens,
             },
         )
+        if resp.status_code != 200:
+            logger.error("[LLM:Mistral] HTTP %d: %s", resp.status_code, resp.text[:500])
         resp.raise_for_status()
         data = resp.json()
         return (data["choices"][0]["message"]["content"] or "").strip()
@@ -309,7 +358,7 @@ def build_multi_provider_from_env() -> MultiProviderLLM:
 
     # Cerebras — PRIMARY (very fast inference)
     cerebras_key = _clean(os.getenv("CEREBRAS_API_KEY", ""))
-    cerebras_model = os.getenv("CEREBRAS_MODEL", "llama-3.3-70b")
+    cerebras_model = os.getenv("CEREBRAS_MODEL", "gpt-oss-120b")
     if cerebras_key:
         providers.append(LLMProvider(
             name="Cerebras",
@@ -319,10 +368,24 @@ def build_multi_provider_from_env() -> MultiProviderLLM:
             kind="openai_compat",
             supports_streaming=True,
         ))
+        logger.info("[LLM:init] Added Cerebras provider: model=%s", cerebras_model)
+
+    # Mistral — SECONDARY (moderate inference)
+    mistral_key = _clean(os.getenv("MISTRAL_API_KEY", ""))
+    mistral_model = os.getenv("MISTRAL_MODEL", "mistral-medium-latest")
+    if mistral_key:
+        providers.append(LLMProvider(
+            name="Mistral",
+            api_key=mistral_key,
+            model=mistral_model,
+            kind="mistral",
+            supports_streaming=False,
+        ))
+        logger.info("[LLM:init] Added Mistral provider: model=%s", mistral_model)
 
     # Groq key 1 — FALLBACK
     groq_key_1 = _clean(os.getenv("GROQ_API_KEY", ""))
-    groq_model = os.getenv("GROQ_LLM_MODEL", "llama-3.3-70b-versatile")
+    groq_model = os.getenv("GROQ_LLM_MODEL", "openai/gpt-oss-120b")
     if groq_key_1 and "xxx" not in groq_key_1.lower():
         providers.append(LLMProvider(
             name="Groq-1",
@@ -331,6 +394,7 @@ def build_multi_provider_from_env() -> MultiProviderLLM:
             kind="groq",
             supports_streaming=True,
         ))
+        logger.info("[LLM:init] Added Groq-1 provider: model=%s", groq_model)
 
     # Groq key 2 — FALLBACK
     groq_key_2 = _clean(os.getenv("GROQ_API_KEY_2", ""))
@@ -342,23 +406,15 @@ def build_multi_provider_from_env() -> MultiProviderLLM:
             kind="groq",
             supports_streaming=True,
         ))
-
-    # Mistral — LAST RESORT
-    mistral_key = _clean(os.getenv("MISTRAL_API_KEY", ""))
-    mistral_model = os.getenv("MISTRAL_MODEL", "mistral-medium-latest")
-    if mistral_key:
-        providers.append(LLMProvider(
-            name="Mistral",
-            api_key=mistral_key,
-            model=mistral_model,
-            kind="mistral",
-            supports_streaming=False,
-        ))
+        logger.info("[LLM:init] Added Groq-2 provider: model=%s", groq_model)
 
     if not providers:
         raise RuntimeError(
             "No LLM providers configured. Set at least CEREBRAS_API_KEY or GROQ_API_KEY in .env"
         )
+
+    logger.info("[LLM:init] Total providers: %d, priority order: %s",
+                len(providers), " → ".join(p.name for p in providers))
 
     return MultiProviderLLM(
         providers=providers,
