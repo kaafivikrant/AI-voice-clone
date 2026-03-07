@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from typing import Any, AsyncIterator
 
 from dotenv import load_dotenv
 
@@ -13,9 +12,6 @@ try:
 except Exception:  # pragma: no cover - dependency/runtime environment concern
     Groq = None  # type: ignore[assignment]
     AsyncGroq = None  # type: ignore[assignment]
-
-MAX_HISTORY_MESSAGES = 20
-
 
 def _clean_env_secret(value: str) -> str:
     """Normalize quoted secrets from .env files."""
@@ -31,11 +27,9 @@ def _clean_env_secret(value: str) -> str:
 
 @dataclass
 class GroqService:
+    """Groq client — used ONLY for STT (Whisper). LLM generation uses Cerebras/Mistral."""
     api_key: str
     stt_model: str = "whisper-large-v3-turbo"
-    llm_model: str = "llama-3.3-70b-versatile"
-    temperature: float = 0.7
-    max_tokens: int = 120
 
     def __post_init__(self) -> None:
         if Groq is None:
@@ -64,44 +58,7 @@ class GroqService:
                 return ""
             raise
 
-    async def aget_agent_response(
-        self,
-        system_prompt: str,
-        conversation_history: list[dict[str, str]],
-        user_text: str,
-        model: str | None = None,
-    ) -> str:
-        messages = self._build_messages(system_prompt, conversation_history, user_text)
-        response = await self.async_client.chat.completions.create(
-            model=model or self.llm_model,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
-        content = response.choices[0].message.content
-        return (content or "").strip()
-
-    async def astream_agent_response(
-        self,
-        system_prompt: str,
-        conversation_history: list[dict[str, str]],
-        user_text: str,
-        model: str | None = None,
-    ) -> AsyncIterator[str]:
-        messages = self._build_messages(system_prompt, conversation_history, user_text)
-        stream = await self.async_client.chat.completions.create(
-            model=model or self.llm_model,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            stream=True,
-        )
-        async for chunk in stream:
-            delta = chunk.choices[0].delta.content
-            if delta:
-                yield delta
-
-    # ── Sync methods (kept for backwards compat) ───────────────────────
+    # ── Sync STT (kept for backwards compat) ─────────────────────────
 
     def transcribe(self, audio_bytes: bytes, filename: str = "recording.webm", language: str = "en") -> str:
         try:
@@ -119,37 +76,6 @@ class GroqService:
                 return ""
             raise
 
-    def get_agent_response(
-        self,
-        system_prompt: str,
-        conversation_history: list[dict[str, str]],
-        user_text: str,
-        model: str | None = None,
-    ) -> str:
-        messages = self._build_messages(system_prompt, conversation_history, user_text)
-        response = self.client.chat.completions.create(
-            model=model or self.llm_model,
-            messages=messages,
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-        )
-        content = response.choices[0].message.content
-        return (content or "").strip()
-
-    # ── Helpers ────────────────────────────────────────────────────────
-
-    def _build_messages(
-        self,
-        system_prompt: str,
-        conversation_history: list[dict[str, str]],
-        user_text: str,
-    ) -> list[dict[str, Any]]:
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system_prompt}]
-        trimmed = conversation_history[-MAX_HISTORY_MESSAGES:]
-        messages.extend(trimmed)
-        messages.append({"role": "user", "content": user_text})
-        return messages
-
 
 def build_groq_service_from_env() -> GroqService:
     api_key = _clean_env_secret(os.getenv("GROQ_API_KEY", ""))
@@ -164,7 +90,4 @@ def build_groq_service_from_env() -> GroqService:
     return GroqService(
         api_key=api_key,
         stt_model=os.getenv("GROQ_STT_MODEL", "whisper-large-v3-turbo"),
-        llm_model=os.getenv("GROQ_LLM_MODEL", "openai/gpt-oss-120b"),
-        temperature=float(os.getenv("GROQ_TEMPERATURE", "0.7")),
-        max_tokens=int(os.getenv("GROQ_MAX_TOKENS", "120")),
     )

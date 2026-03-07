@@ -1,21 +1,24 @@
-# Multi-Voice AI Agent Escalation System
+# Multi-Voice AI Agent System
 
-Voice-based support app with three escalating AI agents:
-- `Arjun` (Junior Dev) -> `Priya` (Senior Dev) -> `Kabir` (CTO)
-- Speech input from browser mic
-- STT + LLM via Groq
-- TTS via local KittenTTS model
-- Real-time exchange over WebSocket
+Dynamic multi-agent voice support system with configurable AI agents, automatic routing between specialists, and real-time voice interaction.
+
+- **STT**: Groq Whisper
+- **LLM**: Cerebras (primary) / Mistral (fallback) — Groq is **not** used for LLM
+- **TTS**: Groq Orpheus
+- **Transport**: WebSocket (streaming sentence-by-sentence)
 
 ## Project Structure
 
 ```text
 ├── backend/
-│   ├── server.py
-│   ├── groq_client.py
-│   ├── tts_engine.py
-│   ├── escalation.py
-│   ├── agents.py
+│   ├── server.py           # FastAPI + WebSocket server
+│   ├── groq_client.py      # Groq STT client (Whisper only)
+│   ├── llm_providers.py    # Multi-provider LLM (Cerebras + Mistral)
+│   ├── tts_engine.py       # Groq Orpheus TTS
+│   ├── agents.py           # Agent registry (dynamic, DB-backed)
+│   ├── database.py         # SQLite agent storage
+│   ├── escalation.py       # Route tag parsing
+│   ├── security.py         # Auth, rate limiting, input validation
 │   ├── requirements.txt
 │   └── .env.example
 ├── frontend/
@@ -29,9 +32,7 @@ Voice-based support app with three escalating AI agents:
 │   ├── vite.config.js
 │   └── .env.example
 ├── experiments/            # Standalone TTS scripts (not integrated)
-│   ├── voice_clone.py      # Qwen3 TTS voice cloning
-│   ├── tts_engine.py       # SopranoTTS engine wrapper
-│   └── tts_benchmark.py    # Soprano vs KittenTTS benchmarks
+├── SECURITY.md             # Security audit & hardening tracker
 └── README.md
 ```
 
@@ -50,7 +51,9 @@ pip install -r requirements.txt
 
 ```bash
 cp .env.example .env
-# Add your GROQ_API_KEY and adjust GPU/device values as needed.
+# Required: GROQ_API_KEY (for STT + TTS)
+# Required: CEREBRAS_API_KEY or MISTRAL_API_KEY (for LLM)
+# Recommended: ADMIN_API_KEY (for agent management auth)
 ```
 
 3. Run API server:
@@ -60,12 +63,6 @@ python server.py
 ```
 
 Backend runs on `http://localhost:8000` by default.
-
-### Notes for TTS
-
-- Default mode: local `KittenTTS` with `TTS_MODEL=KittenML/kitten-tts-nano-0.1`.
-- Agent voices are configured in `backend/agents.py` using Kitten voice IDs.
-- `TTS_ALLOW_MOCK_FALLBACK` is `false` by default. Keep it disabled to surface real TTS errors.
 
 ## Frontend Setup
 
@@ -79,38 +76,64 @@ npm run dev
 
 Frontend runs on `http://localhost:5173` and proxies `/api` + `/ws` to backend.
 
-2. Optional explicit WebSocket URL:
+2. Optional environment config:
 
 ```bash
 cp .env.example .env
-# edit VITE_WS_URL if your backend is remote
+# VITE_WS_URL — override WebSocket URL if backend is remote
+# VITE_ADMIN_API_KEY — must match ADMIN_API_KEY in backend/.env for agent management
 ```
 
 ## Runtime Flow
 
 1. Browser records mic audio (`MediaRecorder`).
 2. Audio blob is sent to `/ws/voice`.
-3. Backend transcribes with Groq Whisper.
-4. Transcript is sent to current agent prompt with per-agent history.
-5. LLM response is **streamed sentence-by-sentence** — each sentence is synthesized and sent as audio immediately, reducing time-to-first-audio.
-6. Response is checked for escalation tags:
-   - `[ESCALATE:SENIOR]` -> switch to `priya`
-   - `[ESCALATE:CTO]` -> switch to `kabir`
-7. Escalation tag is stripped from spoken text.
-8. On escalation, the new agent receives conversation context from the previous agent.
+3. Backend transcribes with Groq Whisper (STT).
+4. Input is sanitized (prompt injection filtering, size limits).
+5. Transcript is sent to current agent via Cerebras/Mistral LLM.
+6. LLM response is **streamed sentence-by-sentence** — each sentence is synthesized via Groq Orpheus TTS and sent as audio immediately.
+7. Response is checked for routing tags (`[ROUTE:agent_id]`).
+8. On routing, the new agent receives conversation context from the previous agent.
 
 ## HTTP + WebSocket Endpoints
 
-- `GET /api/health` -> backend readiness snapshot
-- `GET /api/agents` -> agent list + default active agent
-- `POST /api/reset` -> canonical reset response (WebSocket reset is session-scoped)
-- `WS /ws/voice` -> primary real-time voice channel
+### Public (no auth)
 
-WebSocket JSON events used:
-- Client -> server: `audio_meta`, `text_input`, `reset`, `ping`
-- Server -> client: `ready`, `transcript`, `processing`, `response_chunk`, `response_end`, `agent_state`, `escalation`, `error`
+- `GET /api/health` — backend readiness snapshot
+- `GET /api/agents` — agent metadata (names, titles, specialties)
+- `GET /api/voices` — available TTS voices
+- `POST /api/reset` — reset instructions
+- `WS /ws/voice` — real-time voice channel (rate-limited)
 
-Binary WebSocket messages from server are WAV audio segments to play in sequence.
+### Protected (requires `X-API-Key` header)
+
+- `GET /api/agents?full=true` — full agent config including system prompts
+- `GET /api/agents/{id}` — single agent full config
+- `POST /api/agents` — create agent
+- `PUT /api/agents/{id}` — update agent
+- `DELETE /api/agents/{id}` — delete agent
+- `PUT /api/agents/default/{id}` — set default agent
+- `POST /api/agents/{id}/generate-personality` — LLM-generated personality
+
+### WebSocket Events
+
+- Client → server: `audio_meta`, `text_input`, `reset`, `ping`
+- Server → client: `ready`, `transcript`, `processing`, `response_chunk`, `response_end`, `agent_state`, `escalation`, `agents_updated`, `error`
+- Binary messages from server are WAV audio segments.
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for the full audit and hardening tracker.
+
+Key protections implemented:
+
+- **API key auth** on all agent management endpoints
+- **CORS lockdown** — restricted to configured origins (no wildcard)
+- **Rate limiting** — per-connection limits on WebSocket audio/text messages
+- **Input validation** — max audio size (10 MB), text length (2000 chars), field length limits
+- **Prompt injection filtering** — strips role overrides, chat-template tokens, route tag forgery
+- **Error sanitization** — no provider names or internal details leaked to clients
+- **System prompt protection** — hidden from public API; requires admin key
 
 ## Experiments
 

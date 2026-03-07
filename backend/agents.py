@@ -19,6 +19,7 @@ class Agent:
     tts_instruct: str
     gender: str
     system_prompt: str
+    personality_json: str = ""
 
 
 class AgentRegistry:
@@ -42,6 +43,7 @@ class AgentRegistry:
                 tts_instruct=row.tts_instruct,
                 gender=row.gender,
                 system_prompt=row.system_prompt,
+                personality_json=row.personality_json,
             )
         self._default_id = self._db.get_default_id()
         logger.info("Loaded %d agents, default=%s", len(self._agents), self._default_id)
@@ -89,6 +91,7 @@ class AgentRegistry:
                 "tts_instruct": a.tts_instruct,
                 "gender": a.gender,
                 "is_default": a.id == self._default_id,
+                "personality_json": a.personality_json,
             }
             for a in self._agents.values()
         ]

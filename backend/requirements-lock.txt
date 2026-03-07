@@ -1,0 +1,13 @@
+# Pinned dependency versions for production reproducibility.
+# Generated from backend/.venv312 on 2026-03-07.
+# Use: pip install -r requirements-lock.txt
+
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+python-dotenv==1.1.0
+groq==0.28.0
+soundfile==0.13.1
+numpy==1.26.4
+aiosqlite==0.21.0
+httpx==0.28.1
+https://github.com/KittenML/KittenTTS/releases/download/0.1/kittentts-0.1.0-py3-none-any.whl

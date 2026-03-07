@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import stat
 from dataclasses import asdict, dataclass
 
 logger = logging.getLogger("voice-agent-system")
@@ -21,6 +22,7 @@ class AgentRow:
     tts_instruct: str
     gender: str
     is_default: bool = False
+    personality_json: str = ""
 
 
 SEED_AGENTS: list[AgentRow] = [
@@ -309,6 +311,11 @@ class AgentDB:
     def init(self) -> None:
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        # Restrict DB file to owner-only access
+        try:
+            os.chmod(self.db_path, stat.S_IRUSR | stat.S_IWUSR)  # 0600
+        except OSError:
+            pass  # May fail on some platforms/filesystems
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS agents (
                 id TEXT PRIMARY KEY,
@@ -323,6 +330,14 @@ class AgentDB:
             )
         """)
         self._conn.commit()
+        # Migration: add personality_json column if missing
+        try:
+            self._conn.execute(
+                "ALTER TABLE agents ADD COLUMN personality_json TEXT NOT NULL DEFAULT ''"
+            )
+            self._conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         self._seed_if_empty()
 
     def _seed_if_empty(self) -> None:
@@ -333,12 +348,12 @@ class AgentDB:
         for agent in SEED_AGENTS:
             self._conn.execute(
                 """INSERT INTO agents (id, name, title, specialty, system_prompt,
-                   tts_speaker, tts_instruct, gender, is_default)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   tts_speaker, tts_instruct, gender, is_default, personality_json)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     agent.id, agent.name, agent.title, agent.specialty,
                     agent.system_prompt, agent.tts_speaker, agent.tts_instruct,
-                    agent.gender, int(agent.is_default),
+                    agent.gender, int(agent.is_default), agent.personality_json,
                 ),
             )
         self._conn.commit()
@@ -354,6 +369,7 @@ class AgentDB:
             tts_instruct=row["tts_instruct"],
             gender=row["gender"],
             is_default=bool(row["is_default"]),
+            personality_json=row["personality_json"] if "personality_json" in row.keys() else "",
         )
 
     def get_all(self) -> list[AgentRow]:
@@ -369,12 +385,12 @@ class AgentDB:
     def create(self, agent: AgentRow) -> AgentRow:
         self._conn.execute(
             """INSERT INTO agents (id, name, title, specialty, system_prompt,
-               tts_speaker, tts_instruct, gender, is_default)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               tts_speaker, tts_instruct, gender, is_default, personality_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 agent.id, agent.name, agent.title, agent.specialty,
                 agent.system_prompt, agent.tts_speaker, agent.tts_instruct,
-                agent.gender, int(agent.is_default),
+                agent.gender, int(agent.is_default), agent.personality_json,
             ),
         )
         self._conn.commit()
@@ -387,7 +403,7 @@ class AgentDB:
         fields = []
         values = []
         for key in ("name", "title", "specialty", "system_prompt", "tts_speaker",
-                     "tts_instruct", "gender"):
+                     "tts_instruct", "gender", "personality_json"):
             if key in data:
                 fields.append(f"{key} = ?")
                 values.append(data[key])
