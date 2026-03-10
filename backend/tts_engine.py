@@ -15,6 +15,8 @@ import struct
 
 import httpx
 
+from groq_keys import get_key_pool, is_rate_limit_error, GroqKeyPool
+
 logger = logging.getLogger("voice-agent-system")
 
 # Available Orpheus voices (canopylabs/orpheus-v1-english)
@@ -31,42 +33,47 @@ ORPHEUS_VOICES = [
 _MAX_CHUNK = 200
 
 
-def _clean_key(val: str) -> str:
-    v = (val or "").strip()
-    if len(v) >= 2 and v[0] == v[-1] and v[0] in {"'", '"'}:
-        v = v[1:-1].strip()
-    return v
-
 
 @dataclass
 class TTSEngine:
-    api_key: str = ""
     model: str = "canopylabs/orpheus-v1-english"
     speed: float = 1.0
+    _pool: GroqKeyPool = None
 
     def __post_init__(self) -> None:
         self._client = httpx.Client(timeout=30.0)
         # For backward compat — server checks this
         self.lazy_load = False
+        if self._pool is None:
+            self._pool = get_key_pool()
 
     def _call_tts(self, text: str, speaker: str) -> bytes:
-        """Single TTS API call (text must be <= 200 chars)."""
-        resp = self._client.post(
-            "https://api.groq.com/openai/v1/audio/speech",
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": self.model,
-                "voice": speaker,
-                "input": text,
-                "response_format": "wav",
-                "speed": self.speed,
-            },
-        )
-        resp.raise_for_status()
-        return resp.content
+        """Single TTS API call with key rotation on rate limits."""
+        last_exc = None
+        for _ in range(self._pool.count):
+            resp = self._client.post(
+                "https://api.groq.com/openai/v1/audio/speech",
+                headers={
+                    "Authorization": f"Bearer {self._pool.current_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.model,
+                    "voice": speaker,
+                    "input": text,
+                    "response_format": "wav",
+                    "speed": self.speed,
+                },
+            )
+            if resp.status_code == 429:
+                failed_key = self._pool.current_key
+                self._pool.rotate(failed_key)
+                logger.warning("TTS rate limited, rotated key and retrying")
+                last_exc = Exception(f"TTS 429: {resp.text}")
+                continue
+            resp.raise_for_status()
+            return resp.content
+        raise last_exc  # All keys exhausted
 
     def synthesize(
         self,
@@ -201,11 +208,9 @@ def _build_wav(pcm: bytes, sample_rate: int, bits_per_sample: int, num_channels:
 
 
 def build_tts_engine_from_env() -> TTSEngine:
-    api_key = _clean_key(os.getenv("GROQ_API_KEY", ""))
-    if not api_key:
-        raise RuntimeError("Missing GROQ_API_KEY for TTS.")
+    pool = get_key_pool()
     return TTSEngine(
-        api_key=api_key,
         model=os.getenv("TTS_MODEL", "canopylabs/orpheus-v1-english"),
         speed=float(os.getenv("TTS_SPEED", "1.0")),
+        _pool=pool,
     )
