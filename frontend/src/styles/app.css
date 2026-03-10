@@ -1052,6 +1052,115 @@ body {
   color: var(--text-primary);
 }
 
+/* ── Personality Section ──────────────────────────────────────────────── */
+
+.ab-personality-section {
+  margin-top: 14px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 10px;
+}
+
+.ab-personality-toggle {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  padding: 6px 0;
+  transition: color var(--duration-fast) var(--ease);
+}
+
+.ab-personality-toggle:hover {
+  color: var(--text-primary);
+}
+
+.ab-personality-dot,
+.ab-personality-dot-inline {
+  color: #22c55e;
+  font-size: 0.5rem;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.ab-personality-content {
+  padding-top: 10px;
+}
+
+.ab-personality-generate {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ab-personality-generate input {
+  flex: 1;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.8125rem;
+  outline: none;
+  transition: all var(--duration-fast) var(--ease);
+}
+
+.ab-personality-generate input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.ab-btn-generate {
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-family: inherit;
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--duration-fast) var(--ease);
+}
+
+.ab-btn-generate:hover:not(:disabled) {
+  background: var(--accent);
+  color: var(--text-inverse);
+}
+
+.ab-btn-generate:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ab-personality-editor {
+  width: 100%;
+  min-height: 200px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.6875rem;
+  line-height: 1.6;
+  resize: vertical;
+  outline: none;
+  transition: all var(--duration-fast) var(--ease);
+  box-sizing: border-box;
+}
+
+.ab-personality-editor:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 @media (max-width: 700px) {
   .ab-body {
     flex-direction: column;

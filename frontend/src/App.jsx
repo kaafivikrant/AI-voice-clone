@@ -353,6 +353,7 @@ export default function App() {
           onUpdateAgent={agentConfig.updateAgent}
           onDeleteAgent={agentConfig.deleteAgent}
           onSetDefault={agentConfig.setDefault}
+          onGeneratePersonality={agentConfig.generatePersonality}
         />
       )}
     </div>

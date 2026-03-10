@@ -8,6 +8,7 @@ const EMPTY_FORM = {
   tts_speaker: 'autumn',
   tts_instruct: '',
   gender: 'male',
+  personality_json: '',
 };
 
 export default function AgentBuilder({
@@ -19,6 +20,7 @@ export default function AgentBuilder({
   onUpdateAgent,
   onDeleteAgent,
   onSetDefault,
+  onGeneratePersonality,
 }) {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -26,12 +28,17 @@ export default function AgentBuilder({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(null);
+  const [personalityExpanded, setPersonalityExpanded] = useState(false);
+  const [generatingPersonality, setGeneratingPersonality] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
 
   const startNew = () => {
     setEditingId(null);
     setForm(EMPTY_FORM);
     setIsNew(true);
     setError('');
+    setPersonalityExpanded(false);
+    setAiPrompt('');
   };
 
   const startEdit = (agent) => {
@@ -44,9 +51,12 @@ export default function AgentBuilder({
       tts_speaker: agent.tts_speaker || 'autumn',
       tts_instruct: agent.tts_instruct || '',
       gender: agent.gender || 'male',
+      personality_json: agent.personality_json || '',
     });
     setIsNew(false);
     setError('');
+    setPersonalityExpanded(false);
+    setAiPrompt('');
   };
 
   const cancelEdit = () => {
@@ -54,6 +64,8 @@ export default function AgentBuilder({
     setIsNew(false);
     setForm(EMPTY_FORM);
     setError('');
+    setPersonalityExpanded(false);
+    setAiPrompt('');
   };
 
   const handleSave = async () => {
@@ -97,6 +109,30 @@ export default function AgentBuilder({
     }
   };
 
+  const handleGeneratePersonality = async () => {
+    if (!editingId && !isNew) return;
+    const targetId = editingId;
+    if (!targetId) {
+      setError('Save the agent first before generating personality');
+      return;
+    }
+    setGeneratingPersonality(true);
+    setError('');
+    try {
+      const result = await onGeneratePersonality(targetId, aiPrompt);
+      setForm((prev) => ({
+        ...prev,
+        personality_json: JSON.stringify(result, null, 2),
+      }));
+      setPersonalityExpanded(true);
+    } catch (err) {
+      setError(err.message || 'Personality generation failed');
+    } finally {
+      setGeneratingPersonality(false);
+    }
+  };
+
+  const hasPersonality = form.personality_json && form.personality_json.trim().length > 2;
   const showForm = isNew || editingId;
 
   return (
@@ -126,6 +162,9 @@ export default function AgentBuilder({
                       {agent.name}
                       {agent.id === defaultAgentId && (
                         <span className="ab-default-badge">Default</span>
+                      )}
+                      {agent.personality_json && (
+                        <span className="ab-personality-dot" title="Has personality">&#9679;</span>
                       )}
                     </div>
                     <div className="ab-agent-title">{agent.title}</div>
@@ -280,6 +319,60 @@ export default function AgentBuilder({
                   Define personality and expertise. Routing between agents is handled automatically.
                 </small>
               </label>
+
+              {/* Personality Section */}
+              <div className="ab-personality-section">
+                <button
+                  type="button"
+                  className="ab-personality-toggle"
+                  onClick={() => setPersonalityExpanded(!personalityExpanded)}
+                >
+                  <span>
+                    {personalityExpanded ? '\u25BC' : '\u25B6'} Character Personality
+                    {hasPersonality && <span className="ab-personality-dot-inline">&#9679;</span>}
+                  </span>
+                </button>
+
+                {personalityExpanded && (
+                  <div className="ab-personality-content">
+                    {/* AI Generation */}
+                    <div className="ab-personality-generate">
+                      <input
+                        type="text"
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        placeholder="Optional: describe personality traits, background..."
+                        disabled={generatingPersonality}
+                      />
+                      <button
+                        type="button"
+                        className="ab-btn-generate"
+                        onClick={handleGeneratePersonality}
+                        disabled={generatingPersonality || isNew}
+                        title={isNew ? 'Save agent first to generate personality' : 'Generate personality using AI'}
+                      >
+                        {generatingPersonality ? 'Generating...' : 'Generate with AI'}
+                      </button>
+                    </div>
+                    {isNew && (
+                      <small className="ab-hint">Save the agent first, then generate personality.</small>
+                    )}
+
+                    {/* JSON Editor */}
+                    <textarea
+                      className="ab-personality-editor"
+                      rows={16}
+                      value={form.personality_json}
+                      onChange={(e) => setForm({ ...form, personality_json: e.target.value })}
+                      placeholder='{"identity": {...}, "personality": {...}, ...}'
+                      spellCheck={false}
+                    />
+                    <small className="ab-hint">
+                      Character personality as JSON. Edit manually or generate with AI above.
+                    </small>
+                  </div>
+                )}
+              </div>
 
               <div className="ab-form-actions">
                 <button className="ab-btn-primary" onClick={handleSave} disabled={saving} type="button">
