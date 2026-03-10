@@ -8,6 +8,56 @@ from database import AgentDB, AgentRow
 
 logger = logging.getLogger("voice-agent-system")
 
+_TTS_OUTPUT_RULES = """
+
+--- VOICE OUTPUT RULES (MANDATORY) ---
+Your responses are spoken aloud by a text-to-speech engine. You MUST follow these rules:
+
+FORMATTING:
+- NEVER use markdown: no **, *, _, `, #, >, |, ---, or bullet symbols.
+- NEVER use numbered lists like "1." or "2." — use natural transitions instead ("First... Then... Finally...").
+- NEVER use special characters for emphasis. Use word choice and sentence structure for emphasis instead.
+- NEVER use emojis, emoticons, or unicode symbols.
+- NEVER include code blocks, JSON, or any structured data format.
+
+NUMBERS AND SYMBOLS:
+- Write ALL numbers as spoken words: "forty-seven dollars" not "$47", "three hundred" not "300".
+- Write percentages as words: "twenty-five percent" not "25%".
+- Write math as words: "two plus two equals four" not "2+2=4".
+- Write times as words: "three thirty in the afternoon" not "3:30 PM".
+- Write dates as words: "March eleventh, twenty twenty-six" not "3/11/2026".
+- Write phone numbers as words: "five five five, one two three, four five six seven" not "555-123-4567".
+
+ABBREVIATIONS:
+- Spell out abbreviations: "for example" not "e.g.", "that is" not "i.e.", "and so on" not "etc.".
+- Spell out units: "megabytes" not "MB", "kilometers" not "km".
+- Spell out acronyms on first use or use the full word.
+
+SPEECH STYLE:
+- Use short, clear sentences. Avoid long compound sentences.
+- Use natural spoken transitions: "Well,", "So,", "Now,", "Here's the thing,".
+- Use contractions naturally: "I'm", "don't", "it's", "we'll".
+- Pause-worthy punctuation is fine: periods, commas, question marks, exclamation marks.
+- Avoid parenthetical asides — rephrase as separate sentences.
+- Never say "as an AI" or "as a language model".
+
+EMOTION AND EXPRESSION TAGS:
+You can embed these special tags in your speech to add natural vocal expressions.
+Available tags: <laugh>, <chuckle>, <sigh>, <cough>, <sniffle>, <groan>, <yawn>, <gasp>
+Use them inline where a human would naturally make that sound. Examples:
+- "That's hilarious <laugh> I can't believe that happened."
+- "Well <sigh> I suppose we could try that approach."
+- "Oh wow <gasp> that's amazing news!"
+- "Heh <chuckle> yeah, that's a good point."
+Rules for emotion tags:
+- Use them sparingly and naturally. One or two per response at most.
+- Place them where a human would naturally pause to make that sound.
+- Do NOT use them in every sentence. Most sentences should have no tags.
+- Do NOT combine multiple tags back to back.
+- ONLY use the exact tags listed above. Do not invent new tags.
+- These are the ONLY angle-bracket tags allowed. Never use any other <tag> syntax.
+"""
+
 
 @dataclass
 class Agent:
@@ -102,7 +152,7 @@ class AgentRegistry:
         other_agents = [a for a in self._agents.values() if a.id != agent_id]
 
         if not other_agents:
-            return agent.system_prompt
+            return agent.system_prompt + _TTS_OUTPUT_RULES
 
         roster_lines = []
         for a in other_agents:
@@ -127,7 +177,7 @@ ROUTING RULES:
 - If no teammate is a better fit, handle it yourself.
 - When you route, be natural and friendly about it. Explain briefly why and introduce the teammate.
 """
-        return agent.system_prompt + routing_block
+        return agent.system_prompt + routing_block + _TTS_OUTPUT_RULES
 
     def create_agent(self, data: dict) -> Agent:
         agent_id = _slugify(data["name"])

@@ -1,34 +1,121 @@
 # Multi-Voice AI Agent System
 
-A high-performance, real-time multi-agent voice chat system featuring dynamic agent routing, deep psychological personas, and sentence-by-sentence streaming speech synthesis.
+Real-time voice/text chat with a configurable team of AI specialists that auto-route conversations to the right agent.
 
-The system simulates a professional team of specialists (PM, Designer, Developers, QA, DevOps) who collaborate and hand off tasks to each other automatically based on conversation context.
+---
+
+## System Architecture
+
+```
+                         ┌──────────────────────────┐
+                         │        USER / BROWSER     │
+                         │   Microphone  |  Keyboard │
+                         └──────────────────────────┘
+                                       │
+                                       ▼
+                         ┌──────────────────────────┐
+                         │   FRONTEND  (React 18)    │
+                         │  useWebSocket.js          │
+                         │  useAudioRecorder.js      │
+                         │  useAgentConfig.js        │
+                         │  audioPlayer.js           │
+                         └──────────────────────────┘
+                                       │
+                            WebSocket (ws://:8000)
+                                       │
+                                       ▼
+                         ┌──────────────────────────┐
+                         │  BACKEND  (FastAPI :8000) │
+                         │  server.py               │
+                         │  WebSocket + REST API     │
+                         └──────────────────────────┘
+                                       │
+               ┌───────────────────────┴───────────────────────┐
+               │                                               │
+               ▼                                               ▼
+ ┌─────────────────────────┐                 ┌─────────────────────────┐
+ │     SECURITY LAYER      │                 │     AGENT REGISTRY      │
+ │  security.py            │                 │  agents.py              │
+ │  Rate limiting          │                 │  database.py (SQLite)   │
+ │  Input sanitization     │                 │  Personality schema      │
+ │  Auth  X-API-Key        │                 │  Admin CRUD API          │
+ │  Prompt injection check │                 │  [ROUTE:agent_id] logic  │
+ └─────────────────────────┘                 └─────────────────────────┘
+               │                                               │
+               └───────────────────────┬───────────────────────┘
+                                       │
+               ┌───────────────────────┴───────────────────────┐
+               │                                               │
+               ▼                                               ▼
+ ┌─────────────────────────┐                 ┌─────────────────────────┐
+ │   STT  (audio input)    │                 │      ACTIVE AGENT       │
+ │  groq_client.py         │                 │  System prompt          │
+ │  Groq Whisper           │ ──── text ────▶ │  Personality (100+ fields│
+ │  whisper-large-v3-turbo │                 │  Session context        │
+ │  Multi-key rotation     │                 │  Conversation history   │
+ └─────────────────────────┘                 └─────────────────────────┘
+                                                             │
+                                                             ▼
+                                             ┌─────────────────────────┐
+                                             │      LLM  ROUTER        │
+                                             │  llm_providers.py       │
+                                             │  1. Gemini  (primary)   │
+                                             │  2. Mistral (fallback)  │
+                                             │  3. NVIDIA  (fallback)  │
+                                             │  4. Cerebras (last)     │
+                                             │  Round-robin on 429s    │
+                                             └─────────────────────────┘
+                                                             │
+                                                    streaming tokens
+                                                             │
+                                                             ▼
+                                             ┌─────────────────────────┐
+                                             │     ESCALATION CHECK    │
+                                             │  escalation.py          │
+                                             │  Detects [ROUTE:id] tag │
+                                             │  Strips tag from output │
+                                             │  Transfers session →    │
+                                             │  new agent + greeting   │
+                                             └─────────────────────────┘
+                                                             │
+                                                    sentence by sentence
+                                                             │
+                                                             ▼
+                                             ┌─────────────────────────┐
+                                             │      TTS  ENGINE        │
+                                             │  tts_engine.py          │
+                                             │  Groq Orpheus           │
+                                             │  orpheus-v1-english     │
+                                             │  Multi-key rotation     │
+                                             │  Streams WAV chunks     │
+                                             └─────────────────────────┘
+                                                             │
+                                                    binary WebSocket
+                                                             │
+                                                             ▼
+                                             ┌─────────────────────────┐
+                                             │    BROWSER PLAYBACK     │
+                                             │  audioPlayer.js         │
+                                             │  WAV chunk queue        │
+                                             │  PCM decode + play      │
+                                             │  Continuous mode loop   │
+                                             └─────────────────────────┘
+```
+
+---
 
 ## Key Features
 
-- **Real-Time Voice & Text:** Low-latency interaction via WebSockets with support for both microphone audio (WebM/Opus) and direct text input.
-- **Intelligent Routing:** Agents automatically hand off conversations to a more suitable specialist using `[ROUTE:agent_id]` tags in their responses.
-- **Deep Psychological Personas:** Each agent is backed by a detailed 100+ field personality schema (Big Five traits, cognitive factors, economic status, etc.) that can be auto-generated by an LLM.
-- **Streaming TTS Pipeline:** High-quality voice synthesis using Groq Orpheus, streamed sentence-by-sentence to the client for near-instant playback.
-- **4-Provider LLM Router:** Automatic failover across Gemini, Mistral, NVIDIA, and Cerebras with round-robin rotation on rate limits.
-- **Groq API Key Rotation:** Multiple Groq API keys (`GROQ_API_KEY`, `GROQ_API_KEY_2`, ...) with automatic rotation on rate-limit errors for both STT and TTS.
-- **Admin Management UI:** Create, edit, delete agents, switch the default "entry" agent, and tune personality parameters.
-- **Continuous Mode:** "Walkie-talkie" style interaction that automatically resumes listening after the agent finishes speaking.
+- **Real-Time Voice & Text** — Low-latency interaction via WebSockets with microphone audio (WebM/Opus) and direct text input.
+- **Intelligent Routing** — Agents hand off to the right specialist using `[ROUTE:agent_id]` tags; user never hears the tag.
+- **Deep Psychological Personas** — Each agent has a 100+ field personality schema (Big Five traits, cognitive factors, economic status, etc.) auto-generatable by LLM.
+- **Streaming TTS Pipeline** — Groq Orpheus synthesizes sentence-by-sentence for near-instant playback.
+- **4-Provider LLM Router** — Auto-failover across Gemini → Mistral → NVIDIA → Cerebras with round-robin on rate limits.
+- **Groq Key Rotation** — Multiple `GROQ_API_KEY_N` keys rotate automatically on 429s for both STT and TTS.
+- **Admin Management UI** — Create, edit, delete agents, switch the default entry agent, tune personality parameters.
+- **Continuous Mode** — Walkie-talkie style: auto-resumes listening after the agent finishes speaking.
 
-## Technical Stack
-
-### Backend
-- **Framework:** FastAPI (Python 3.12+)
-- **STT:** Groq Whisper (`whisper-large-v3-turbo`) with multi-key rotation
-- **LLM Router:** Gemini (primary, streaming) -> Mistral (fallback) -> NVIDIA (fallback) -> Cerebras (last resort)
-- **TTS:** Groq Orpheus API (`canopylabs/orpheus-v1-english`) with multi-key rotation
-- **Database:** SQLite with automated migrations
-- **Security:** Rate limiting, prompt-injection detection, API-key protected management endpoints
-
-### Frontend
-- **Framework:** React 18 + Vite
-- **State Management:** Custom hooks (no state library)
-- **Audio Processing:** Browser MediaRecorder API with PCM/WAV playback optimization
+---
 
 ## Project Structure
 
@@ -41,7 +128,7 @@ backend/
   groq_client.py        # Groq STT (Whisper) with key rotation
   groq_keys.py          # Shared Groq API key pool (auto-discovers GROQ_API_KEY_N)
   tts_engine.py         # Groq Orpheus TTS with key rotation
-  escalation.py         # [ROUTE:agent_id] tag parsing and cleaning
+  escalation.py         # [ROUTE:agent_id] tag parsing and session transfer
   security.py           # Auth, rate limiting, input validation, prompt sanitization
   personality_schema.py # Deep psychological JSON schema
   test_security.py      # Security test suite (37 tests)
@@ -50,11 +137,13 @@ frontend/
   src/
     components/         # AgentBuilder, AgentPanel, ChatHistory, etc.
     hooks/              # useWebSocket, useAudioRecorder, useAgentConfig
-    utils/              # audioPlayer.js (WAV queueing)
+    utils/              # audioPlayer.js (WAV chunk queue)
     App.jsx             # Main application shell
 
 experiments/            # Standalone R&D scripts (not wired into main system)
 ```
+
+---
 
 ## Setup
 
@@ -65,7 +154,7 @@ cd backend
 python3.12 -m venv .venv312
 source .venv312/bin/activate
 pip install -r requirements.txt
-cp .env.example .env    # Then fill in your API keys
+cp .env.example .env    # Fill in your API keys
 python server.py        # Runs on http://localhost:8000
 ```
 
@@ -83,7 +172,7 @@ npm run dev             # Runs on http://localhost:5173
 | Variable | Purpose |
 |----------|---------|
 | `GROQ_API_KEY` | STT (Whisper) + TTS (Orpheus) — primary key |
-| `GROQ_API_KEY_2`, `_3`, ... | Additional Groq keys for rotation (optional, auto-discovered) |
+| `GROQ_API_KEY_2`, `_3`, ... | Additional Groq keys for rotation (auto-discovered) |
 | `GEMINI_API_KEY` | Primary LLM provider (Gemini 2.5 Flash) |
 
 **Recommended (fallback LLM providers):**
@@ -98,73 +187,82 @@ npm run dev             # Runs on http://localhost:5173
 |----------|---------|
 | `ADMIN_API_KEY` | Key for management endpoints (auto-generated if empty) |
 | `VITE_ADMIN_API_KEY` | Frontend admin key (must match backend `ADMIN_API_KEY`) |
-| `LLM_MAX_TOKENS` | Max tokens for LLM responses (default: 500) |
-| `WS_AUDIO_RATE_LIMIT` | Audio messages per minute per connection (default: 60) |
-| `WS_TEXT_RATE_LIMIT` | Text messages per minute per connection (default: 90) |
+| `LLM_MAX_TOKENS` | Max tokens per LLM response (default: 500) |
+| `WS_AUDIO_RATE_LIMIT` | Audio messages/min per connection (default: 60) |
+| `WS_TEXT_RATE_LIMIT` | Text messages/min per connection (default: 90) |
 
 ### LLM Provider Priority
 
-The system tries providers in this order, falling back automatically on errors or rate limits:
-
-1. **Gemini** (`gemini-2.5-flash`) — generous free tier, streaming
-2. **Mistral** (`mistral-medium-latest`) — reliable fallback, non-streaming
-3. **NVIDIA** (`openai/gpt-oss-120b`) — OpenAI-compatible, streaming
-4. **Cerebras** (`gpt-oss-120b`) — fast but tight free-tier rate limits
+```
+  ┌─────────────────────────────────────────────┐
+  │  1. Gemini     gemini-2.5-flash              │  ← primary, streaming
+  │     │                                        │
+  │     └─► 2. Mistral   mistral-medium-latest   │  ← reliable fallback
+  │              │                               │
+  │              └─► 3. NVIDIA   gpt-oss-120b    │  ← OpenAI-compat
+  │                       │                      │
+  │                       └─► 4. Cerebras        │  ← last resort
+  └─────────────────────────────────────────────┘
+  Automatic failover on errors or 429 rate limits
+```
 
 ### Groq Key Rotation
 
-Add multiple Groq keys to `.env` for automatic rotation when a key hits rate limits:
-
-```
+```bash
+# .env — add as many keys as you have
 GROQ_API_KEY=gsk_...
 GROQ_API_KEY_2=gsk_...
 GROQ_API_KEY_3=gsk_...
 ```
 
-Keys are auto-discovered at startup. Both STT and TTS share the same pool. When one key gets a 429, the system rotates to the next key and retries transparently.
+Keys are auto-discovered at startup. STT and TTS share the same pool. On a 429, the system rotates to the next key and retries transparently.
 
-## Development
+---
 
-### Adding a New Agent
+## How Routing Works
+
+```
+  Agent A responds with [ROUTE:agent_b] tag
+           │
+           ▼
+  escalation.py detects + strips the tag
+           │
+           ▼
+  Session context transfers to Agent B
+           │
+           ▼
+  Agent B receives conversation summary
+  and provides a natural greeting
+```
+
+---
+
+## Security
+
+- **Input Sanitization** — All user text and STT transcripts sanitized before reaching the LLM.
+- **Prompt Injection Detection** — Strips route tags and chat-template tokens from user input.
+- **Rate Limiting** — Token-bucket per connection for audio and text messages.
+- **Admin Auth** — All mutating endpoints require `X-API-Key` header with constant-time comparison.
+- **Audit Logging** — All agent CRUD operations logged with `[AUDIT]` prefix and client IP.
+- **CORS** — Locked to `localhost:5173,localhost:8000` by default.
+- **DB Permissions** — SQLite file created with `0600` permissions.
+
+```bash
+# Run security test suite
+cd backend && source .venv312/bin/activate
+python -m pytest test_security.py -v    # 37 tests
+```
+
+---
+
+## Adding a New Agent
 
 1. Open the "Configure Agents" panel in the UI.
 2. Click "Create New Agent".
 3. Define the Name, Title, and System Prompt.
 4. (Optional) Use "Generate Personality" to auto-populate the psychological schema.
-5. Save. The agent is now available for routing.
-
-### How Routing Works
-
-Agents use `[ROUTE:target_id]` tags in their LLM output to transfer conversations:
-- Backend detects and strips the tag (user never hears it).
-- Session context transfers to the new agent.
-- New agent receives a conversation summary and provides a natural greeting.
-
-### Adding a New LLM Provider
-
-1. Add the API key env var to `.env`.
-2. In `llm_providers.py`, add a new `LLMProvider` entry in `build_multi_provider_from_env()`.
-3. For OpenAI-compatible APIs: use `kind="openai_compat"` with `base_url` — no new methods needed.
-4. For custom APIs: implement `_call_<name>()` and `_stream_<name>()` methods, and add routing in `_call_provider()` / `_stream_provider()`.
-
-### Testing
-
-```bash
-cd backend
-source .venv312/bin/activate
-python -m pytest test_security.py -v    # 37 security tests
-```
-
-## Security
-
-- **Input Sanitization:** All user text and STT transcripts sanitized before reaching the LLM.
-- **Prompt Injection Detection:** Strips route tags and chat-template tokens from user input.
-- **Rate Limiting:** Token-bucket per connection for both audio and text messages.
-- **Admin Auth:** All mutating endpoints require `X-API-Key` header with constant-time comparison.
-- **Audit Logging:** All agent CRUD operations logged with `[AUDIT]` prefix and client IP.
-- **CORS:** Locked to `localhost:5173,localhost:8000` by default.
-- **DB Permissions:** SQLite file created with `0600` permissions.
+5. Save — the agent is now available for routing.
 
 ---
 
-*For production use, set a strong `ADMIN_API_KEY` and restrict `CORS_ALLOW_ORIGINS` to your specific domains.*
+*For production: set a strong `ADMIN_API_KEY` and restrict `CORS_ALLOW_ORIGINS` to your specific domains.*

@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from agents import AgentRegistry
 from database import AgentDB
-from escalation import check_route, strip_route_tags
+from escalation import check_route, clean_for_speech, strip_emotion_tags, strip_route_tags
 from groq_client import build_groq_service_from_env
 from llm_providers import MultiProviderLLM, build_multi_provider_from_env
 from security import (
@@ -510,17 +510,18 @@ async def _process_text_streaming(
         sentences, buffer = _split_sentences(buffer)
         for sentence in sentences:
             # Strip route tags from spoken text
-            clean_sentence = strip_route_tags(sentence)
-            if not clean_sentence:
+            tts_sentence = clean_for_speech(strip_route_tags(sentence))
+            if not tts_sentence:
                 continue
+            display_sentence = strip_emotion_tags(tts_sentence)
             await _safe_send_json(websocket, {
                 "type": "response_chunk",
-                "text": clean_sentence,
+                "text": display_sentence,
                 "agent": session.current_agent,
             })
             audio = await asyncio.to_thread(
                 tts_engine.synthesize,
-                clean_sentence,
+                tts_sentence,
                 current_agent.tts_speaker,
                 current_agent.tts_instruct,
                 "English",
@@ -530,16 +531,17 @@ async def _process_text_streaming(
     # Flush remaining buffer
     remaining = buffer.strip()
     if remaining:
-        clean_remaining = strip_route_tags(remaining)
-        if clean_remaining:
+        tts_remaining = clean_for_speech(strip_route_tags(remaining))
+        if tts_remaining:
+            display_remaining = strip_emotion_tags(tts_remaining)
             await _safe_send_json(websocket, {
                 "type": "response_chunk",
-                "text": clean_remaining,
+                "text": display_remaining,
                 "agent": session.current_agent,
             })
             audio = await asyncio.to_thread(
                 tts_engine.synthesize,
-                clean_remaining,
+                tts_remaining,
                 current_agent.tts_speaker,
                 current_agent.tts_instruct,
                 "English",
@@ -549,11 +551,12 @@ async def _process_text_streaming(
     # Update history and check routing
     current_history.append({"role": "user", "content": user_text})
     cleaned_response, next_agent = check_route(full_response, registry.all_agent_ids())
-    current_history.append({"role": "assistant", "content": cleaned_response})
+    display_response = strip_emotion_tags(clean_for_speech(cleaned_response))
+    current_history.append({"role": "assistant", "content": display_response})
 
     await _safe_send_json(websocket, {
         "type": "response_end",
-        "full_text": cleaned_response,
+        "full_text": display_response,
         "agent": session.current_agent,
         "seq": session.next_seq(),
     })
@@ -617,11 +620,13 @@ async def _handle_routing(
     )
 
     greeting_text, _ = check_route(greeting_text, registry.all_agent_ids())
-    session.history[session.current_agent].append({"role": "assistant", "content": greeting_text})
+    tts_greeting = clean_for_speech(greeting_text)
+    display_greeting = strip_emotion_tags(tts_greeting)
+    session.history[session.current_agent].append({"role": "assistant", "content": display_greeting})
 
     greeting_audio = await asyncio.to_thread(
         tts_engine.synthesize,
-        greeting_text,
+        tts_greeting,
         next_agent_config.tts_speaker,
         next_agent_config.tts_instruct,
         "English",
@@ -629,13 +634,13 @@ async def _handle_routing(
 
     await _safe_send_json(websocket, {
         "type": "response_chunk",
-        "text": greeting_text,
+        "text": display_greeting,
         "agent": session.current_agent,
     })
     await websocket.send_bytes(greeting_audio)
     await _safe_send_json(websocket, {
         "type": "response_end",
-        "full_text": greeting_text,
+        "full_text": display_greeting,
         "agent": session.current_agent,
         "kind": "greeting",
         "seq": session.next_seq(),
